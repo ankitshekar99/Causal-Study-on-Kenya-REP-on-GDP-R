@@ -1,0 +1,653 @@
+---
+title: "Team 14 Empirical Economic Analysis Final Project"
+subtitle: "Case Study: Impact of Rural Electrification Programme (REP) on Kenya's GDP"
+authors: Lily Li (jll139)
+         David Li (kl524)
+         Ankit Chandra Shekar (ac948)
+         Prerana Munipalli (pm300)
+         Xiang Zhou (xz434)
+format: html
+editor: visual
+toc: true
+toc-depth: 5
+toc-location: left
+---
+
+# Introduction
+
+Kenya's Rural Electrification Programme (REP) was initiated as part of the country's Vision 2030 development agenda, aiming to enhance electricity access in rural areas. The program's first five-year implementation plan spanned from 2008 to 2012, targeting the electrification of all public facilities, including trading centers, schools, health centers, community water projects, and approximately one million households.
+
+We want to examine the effect of this programme on Kenya's GDP by analyzing whether increased electricity access contributed to economic growth. Given the crucial role of electricity in industrialization, productivity, and overall economic development, this study seeks to determine if REP had a measurable impact on Kenya's GDP trajectory. By leveraging empirical methods, including the Synthetic Control Method, we aim to quantify the causal relationship between electricity expansion and economic performance, providing insights into the effectiveness of large-scale rural electrification policies.
+
+For this analysis, we use data from **2003 to 2017**---five years before the implementation of REP and five years after the initial phase. This timeframe allows us to establish pre-treatment trends and evaluate the program's impact over a reasonable post-treatment period. During this time, Kenya's electricity access increased significantly, rising from **27.2% in 2003 to approximately 73.4% in 2017**. This growth suggests that REP was successful in expanding electricity access, making it a suitable case for assessing the broader economic implications of rural electrification.
+
+Key data aspects (Unfiltered):
+
+-   1960-2023
+
+-   Countries in the world
+
+-   Access to electricity (% of population)
+
+-   GDP per capita (current US\$)
+
+-   GDP (current US\$)
+
+Key data aspects (Filtered):
+
+-   2003-2017
+
+-   Predictors
+
+    -   GDP per capita (current US\$)
+
+    -   Trade (% of GDP)
+
+    -   Foreign direct investment (FDI) net inflows (% of GDP)
+
+    -   Unemployment, total (% of labor force)
+
+    -   Employment to population ratio, total (%)
+
+    -   Access to electricity (% of population)
+
+    -   Urban population (% of total population)
+
+    -   Government Effectiveness
+
+    -   Inflation, GDP deflator (annual %)
+
+-   13 countries including Kenya
+
+    -   Kenya
+
+    -   Benin
+
+    -   Gambia, The
+
+    -   Guinea
+
+    -   Haiti
+
+    -   Togo
+
+    -   Madagascar
+
+    -   Burkina Faso
+
+    -   Rwanda
+
+    -   Mali
+
+    -   Niger
+
+    -   Malaysia
+
+    -   Norway
+
+## Setting up the DAG
+
+-   Outcome: GDP
+-   Treatment: Rural Electrification Programme (REP)
+-   Treatment Effect: The impact of REP on GDP
+-   Treated: Kenya after REP implementation
+-   Control: Other similar countries
+
+## Housekeeping
+
+```{r}
+knitr::opts_chunk$set(echo = TRUE)
+rm(list=ls()) # clear workspace
+cat("\014")  # clear console
+library(haven)
+library(ggplot2)
+library(plm)
+library(psych)
+library(gplots)
+library(car)
+library(dplyr)
+library(Synth)
+library(tidyverse)
+library(skimr)
+library(readxl)
+library(corrplot)
+```
+
+## Synthetic Control
+
+This setting is suitable for Synthetic Control:
+
+-   We have a single treated unit (Kenya)
+-   We have panel data (years before and after REP in the 2010s) across several countries
+
+## Load Data
+
+```{r}
+# Step 1: Load the dataset from the Excel file
+wdi <- read_excel("extract-worlddevelopment-indicator.xlsx", sheet = 1)
+
+# Step 2: View the first few rows to understand the structure
+head(wdi)
+```
+
+# High-level EDA
+
+## Correlation Matrix
+
+```{r}
+wdi_temp = subset(wdi, select = c("GDP per capita (current US$) [NY.GDP.PCAP.CD]", 
+                      "Trade (% of GDP) [NE.TRD.GNFS.ZS]", 
+                      "Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]", 
+                      "Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]", 
+                      "Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]", 
+                      "Access to electricity (% of population) [EG.ELC.ACCS.ZS]", 
+                      "Urban population (% of total population) [SP.URB.TOTL.IN.ZS]", 
+                      "Government Effectiveness: Estimate [GE.EST]", 
+                      "Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]"))
+colnames(wdi_temp) <- c("GDP per capita", "Trade % GDP", "FDI % GDP", 
+                         "Unemployment %", "Employment %", "Electricity Access %", 
+                         "Urban Pop %", "Gov Effectiveness", "Inflation %")
+par(mar = c(5, 5, 5, 5))
+cor_matrix = cor(wdi_temp, use = "pairwise.complete.obs")
+corrplot(cor_matrix, method = "color", type = "lower", tl.cex = 0.8, tl.col = "black", tl.srt = 45)
+```
+
+## GDP per capita
+
+```{r}
+summary(wdi$`GDP per capita (current US$) [NY.GDP.PCAP.CD]`)
+```
+
+```{r}
+hist(wdi$`GDP per capita (current US$) [NY.GDP.PCAP.CD]`)
+```
+
+```{r}
+boxplot(wdi$`GDP per capita (current US$) [NY.GDP.PCAP.CD]`)
+```
+
+### GDP per capita - top 25 countries
+
+```{r}
+top_countries <- wdi %>%
+  group_by(`Country Name`) %>%
+  summarize(mean_GDP = mean(`GDP per capita (current US$) [NY.GDP.PCAP.CD]`, na.rm = TRUE)) %>%
+  top_n(25, mean_GDP)
+```
+
+```{r}
+ggplot(wdi %>% filter(`Country Name` %in% top_countries$`Country Name`),
+       aes(x = factor(`Country Name`), y = `GDP per capita (current US$) [NY.GDP.PCAP.CD]`)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(x = "Country", y = "GDP per capita", title = "Top 25 Countries by GDP per Capita")
+```
+
+### GDP per capita - bottom 25 countries
+
+```{r}
+bottom_countries <- wdi %>%
+  group_by(`Country Name`) %>%
+  summarize(mean_GDP = mean(`GDP per capita (current US$) [NY.GDP.PCAP.CD]`, na.rm = TRUE)) %>%
+  top_n(-25, mean_GDP)
+```
+
+```{r}
+ggplot(wdi %>% filter(`Country Name` %in% bottom_countries$`Country Name`),
+       aes(x = factor(`Country Name`), y = `GDP per capita (current US$) [NY.GDP.PCAP.CD]`)) +
+  geom_boxplot() +
+  coord_flip() +
+  labs(x = "Country", y = "GDP per capita", title = "Bottom 25 Countries by GDP per Capita")
+```
+
+## Trade (% of GDP)
+
+```{r}
+summary(wdi$`Trade (% of GDP) [NE.TRD.GNFS.ZS]`)
+```
+
+```{r}
+hist(wdi$`Trade (% of GDP) [NE.TRD.GNFS.ZS]`)
+```
+
+## Foreign direct investment, net inflows (% of GDP)
+
+```{r}
+summary(wdi$`Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]`)
+```
+
+```{r}
+hist(wdi$`Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]`)
+```
+
+## Unemployment, total (% of total labor force)
+
+```{r}
+summary(wdi$`Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]`)
+```
+
+```{r}
+hist(wdi$`Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]`)
+```
+
+## Employment to population ratio, 15+, total (%)
+
+```{r}
+summary(wdi$`Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]`)
+```
+
+```{r}
+hist(wdi$`Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]`)
+```
+
+## Access to electricity (% of population)
+
+```{r}
+summary(wdi$`Access to electricity (% of population) [EG.ELC.ACCS.ZS]`)
+```
+
+```{r}
+hist(wdi$`Access to electricity (% of population) [EG.ELC.ACCS.ZS]`)
+```
+
+## Urban population (% of total population)
+
+```{r}
+summary(wdi$`Urban population (% of total population) [SP.URB.TOTL.IN.ZS]`)
+```
+
+```{r}
+hist(wdi$`Urban population (% of total population) [SP.URB.TOTL.IN.ZS]`)
+```
+
+## Government Effectiveness
+
+```{r}
+summary(wdi$`Government Effectiveness: Estimate [GE.EST]`)
+```
+
+```{r}
+hist(wdi$`Government Effectiveness: Estimate [GE.EST]`)
+```
+
+## Inflation, GDP deflator (annual %)
+
+```{r}
+summary(wdi$`Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]`)
+```
+
+```{r}
+hist(wdi$`Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]`)
+```
+
+# EDA
+
+## Data cleaning
+
+```{r}
+# Step 3: Define the list of required countries
+selected_countries <- c("Benin", "Gambia, The", "Guinea", "Haiti", 
+                        "Togo", "Madagascar", "Burkina Faso", "Rwanda", 
+                        "Mali", "Niger", "Malaysia", "Norway", "Kenya")
+
+# Step 4: Define the year range to filter (2003-2017)
+year_range <- 2003:2017
+
+# Step 5: Define the columns to keep
+selected_columns <- c("Country Name", "Time", 
+                      "GDP per capita (current US$) [NY.GDP.PCAP.CD]", 
+                      "Trade (% of GDP) [NE.TRD.GNFS.ZS]", 
+                      "Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]", 
+                      "Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]", 
+                      "Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]", 
+                      "Access to electricity (% of population) [EG.ELC.ACCS.ZS]", 
+                      "Urban population (% of total population) [SP.URB.TOTL.IN.ZS]", 
+                      "Government Effectiveness: Estimate [GE.EST]", 
+                      "Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]")
+
+# Step 6: Filter the dataset
+wdi_cleaned <- wdi %>%
+  filter(Time %in% year_range, `Country Name` %in% selected_countries) %>%
+  select(all_of(selected_columns))
+
+# Step 7: Check the structure and summary statistics of the cleaned dataset
+str(wdi_cleaned)
+summary(wdi_cleaned)
+
+# Step 8: Display the first few rows to verify
+head(wdi_cleaned)
+```
+
+```{r}
+unique(wdi_cleaned$`Country Name`)
+
+temp<- wdi_cleaned %>%
+  select(`Country Name`)
+```
+
+```{r}
+skim(wdi_cleaned)
+```
+
+Completion rate is high indicating low missing values, we shall proceed!
+
+## Selected EDA
+
+```{r}
+selected13_countries <- wdi %>%
+  filter(`Country Name` %in% selected_countries)
+```
+
+### Access to electricity (% of population) - selected 13 countries
+
+```{r}
+ggplot(selected13_countries,
+       aes(x = factor(`Country Name`),
+           y = `Access to electricity (% of population) [EG.ELC.ACCS.ZS]`)) +
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom="point", shape=20, size=3, color="red", fill="red") +
+  coord_flip() +
+  labs(x = "Country", y = "Access to electricity", title = "Selected 13 Countries")
+```
+
+```{r}
+hist(selected13_countries$`Access to electricity (% of population) [EG.ELC.ACCS.ZS]`)
+```
+
+### Urban population (% of total population) - selected 13 countries
+
+```{r}
+ggplot(selected13_countries,
+       aes(x = factor(`Country Name`),
+           y = `Urban population (% of total population) [SP.URB.TOTL.IN.ZS]`)) +
+  geom_boxplot() +
+  stat_summary(fun.y=mean, geom="point", shape=20, size=3, color="red", fill="red") +
+  coord_flip() +
+  labs(x = "Country", y = "Access to electricity", title = "Selected 13 Countries")
+```
+
+```{r}
+hist(selected13_countries$`Urban population (% of total population) [SP.URB.TOTL.IN.ZS]`)
+```
+
+## Data prep for Synth package
+
+```{r}
+# Step 1: Assign Numeric IDs to Countries
+# Convert "Country Name" to a numeric ID for identification in the dataset
+wdi_cleaned <- wdi_cleaned %>%
+  mutate(CountryNo = as.numeric(factor(`Country Name`)))  
+
+# Convert the cleaned dataset into a standard data frame format
+wdi_cleaned_df <- as.data.frame(wdi_cleaned)
+
+
+# Step 2: Prepare Data for Synthetic Control
+dataprep.out <- dataprep(
+  foo = wdi_cleaned_df,  # Use the cleaned dataset
+
+  # Step 3: Define Predictor Variables (Independent Variables)
+  predictors = c("GDP per capita (current US$) [NY.GDP.PCAP.CD]",  
+                 "Trade (% of GDP) [NE.TRD.GNFS.ZS]",  
+                 "Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]",  
+                 "Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]",  
+                 "Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]",  
+                 "Access to electricity (% of population) [EG.ELC.ACCS.ZS]",  
+                 "Urban population (% of total population) [SP.URB.TOTL.IN.ZS]",  
+                 "Government Effectiveness: Estimate [GE.EST]",  
+                 "Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]"),  # Removed "Fixed broadband subscriptions" due to missing data
+
+  # Step 4: Define How Predictors Are Aggregated (Mean Over Time)
+  predictors.op = c("mean"),  
+
+  # Step 5: Define Dependent Variable (Outcome Variable)
+  dependent = c("GDP per capita (current US$) [NY.GDP.PCAP.CD]"),
+
+  # Step 6: Define Unit and Time Identifiers
+  unit.variable = "CountryNo",  # Numeric ID for each country
+  time.variable = "Time",       # Time period variable
+  
+  # Step 7: Specify Treated and Control Units
+  treatment.identifier = 6,   # The treated country (receiving intervention)
+  controls.identifier = c(1:5,7:12),
+
+  # Step 8: Define Pre-Treatment Period (Used to Construct Synthetic Control)
+  time.predictors.prior = c(2003:2007),  # Only pre-intervention years
+  time.optimize.ssr = c(2003:2007),  # Optimize synthetic control weights using pre-treatment years
+
+  # Step 9: Introduce Special Predictors for Missing Values
+  # Special predictors use only specific years for missing data 
+  special.predictors = list(
+    list("Trade (% of GDP) [NE.TRD.GNFS.ZS]", c(2005, 2007), c("mean")),  # Use only 2005 & 2007 values
+    list("Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]", c(2005, 2007), c("mean")),
+    list("Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]", c(2005, 2007), c("mean")),
+    list("Access to electricity (% of population) [EG.ELC.ACCS.ZS]", c(2005, 2007), c("mean")),
+    list("Government Effectiveness: Estimate [GE.EST]", c(2005, 2007), c("mean"))
+  ), 
+
+  # Step 10: Define Country Names for Readability in Outputs
+  unit.names.variable = "Country Name",
+  
+  # Step 11: Define Time Window for Visualization
+  time.plot = c(2003:2017)   # Full timeline for pre- and post-intervention analysis
+)
+```
+
+```{r}
+dataprep.out$X1
+```
+
+Note: dataprep.out's X1 elements are Kenya predictors
+
+```{r}
+dataprep.out$X0
+```
+
+X0 element of the dataprep.out object is a matrix average values of predictors for the control countries during the pre-treatment period (i.e. 2007 before the initial implementation of REP)
+
+```{r}
+dataprep.out$Z1
+```
+
+Z1 element of the dataprep.out object is the outcome variable for Kenya
+
+```{r}
+dataprep.out$Z0
+```
+
+The meaning of the Z0 element of the dataprep.out object is a matrix of outcome variables for the control group
+
+# Synthetic Control
+
+## Optimizer
+
+```{r}
+synth.out <- synth(data.prep.obj = dataprep.out, method = "BFGS")
+```
+
+## Summary
+
+### Create summary tables
+
+```{r}
+synth.tables <- synth.tab(dataprep.res = dataprep.out, synth.res = synth.out)
+```
+
+### Pre Treatment Comparison
+
+```{r}
+synth.tables$tab.pred
+```
+
+-   The Treated column captures the average values of each predictor for the Treated (Kenya)
+-   The Synthetic column captures the average values of each predictor for the Synthetic treated unit built from the control countries (not Kenya)
+-   The Sample Mean captures the average values across all control countries without weighting
+-   We want to compare the Treated column with the Synthetic column. If they are similar, then we have a good synthetic treated group
+-   **The values are all reasonably similar. The mean values across these predictors are close, which gives us confidence.**
+
+### Predictors
+
+```{r}
+synth.tables$tab.v
+```
+
+Employment to population ratio, 15+, total (%) appears to have the highest level of importance (23.4%) when attempting to mimic Kenya.
+
+### Countries
+
+```{r}
+synth.tables$tab.w
+```
+
+Niger has the vast majority of the weight, with Guinea and Mali taking most of the rest.
+
+Five countries are needed to create a pseudo version of Kenya in the pre-treatment period given the available predictors.
+
+With all Synthetic Control analyses, we are assuming that the controls will continue to behave like the treated aside from the treatment in the post-treatment periods.
+
+## Viewing the Treatment Effects
+
+### Path Plot
+
+```{r}
+path.plot(synth.res = synth.out, dataprep.res = dataprep.out, Ylab = "GDP per capita (current US$)", Xlab = "Year",Ylim = c(0, 2000), Legend = c("Kenya", "Synthetic Kenya"), Legend.position = "bottomright")
+```
+
+The synthetic Kenya country mimics the actual relatively well in the pre-treatment period.
+
+The two deviate somewhat significantly afterward.
+
+Specifically, the observed Kenya's GDP seems higher in the post-event period, suggesting a positive treatment effect.
+
+### Gap Plot
+
+```{r}
+gaps.plot(synth.res = synth.out, dataprep.res = dataprep.out, Ylab = "gap in per-capita GDP (Current US$)", Xlab = "Year", Ylim = c(-400, 1000), Main = NA)
+```
+
+The vertical axis describes the difference between Kenya and the synthetic Kenya.
+
+The fact that the line goes positive after 2012 suggests a positive treatment effect.
+
+## Placebo Test
+
+### Placebo distribution
+
+```{r}
+store <- matrix(NA,length(2003:2017),13)
+colnames(store) <- unique(wdi_cleaned_df$`Country Name`)
+
+for (iter in 1:13)
+{
+dataprep.out <- dataprep(
+  foo = wdi_cleaned_df,  # Use the cleaned dataset
+
+  # Step 3: Define Predictor Variables (Independent Variables)
+  predictors = c(  
+                 "Trade (% of GDP) [NE.TRD.GNFS.ZS]",  
+                 "Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]",  
+                 "Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]",  
+                 "Employment to population ratio, 15+, total (%) (modeled ILO estimate) [SL.EMP.TOTL.SP.ZS]",  
+                 "Access to electricity (% of population) [EG.ELC.ACCS.ZS]",  
+                 "Urban population (% of total population) [SP.URB.TOTL.IN.ZS]",  
+                 "Government Effectiveness: Estimate [GE.EST]",  
+                 "Inflation, GDP deflator (annual %) [NY.GDP.DEFL.KD.ZG]"),  # Removed "Fixed broadband subscriptions" due to missing data
+
+  # Step 4: Define How Predictors Are Aggregated (Mean Over Time)
+  predictors.op = c("mean"),  
+
+  # Step 5: Define Dependent Variable (Outcome Variable)
+  dependent = c("GDP per capita (current US$) [NY.GDP.PCAP.CD]"),
+
+  # Step 6: Define Unit and Time Identifiers
+  unit.variable = "CountryNo",  # Numeric ID for each country
+  time.variable = "Time",       # Time period variable
+  
+  # Step 7: Specify Treated and Control Units
+  treatment.identifier = iter,   # The treated country (receiving intervention)
+  controls.identifier = setdiff(1:13, iter),
+
+  # Step 8: Define Pre-Treatment Period (Used to Construct Synthetic Control)
+  time.predictors.prior = c(2003:2007),  # Only pre-intervention years
+  time.optimize.ssr = c(2003:2007),  # Optimize synthetic control weights using pre-treatment years
+
+  # Step 9: Introduce Special Predictors for Missing Values
+  # Special predictors use only specific years for missing data 
+  special.predictors = list(
+    list("Trade (% of GDP) [NE.TRD.GNFS.ZS]", c(2005, 2007), c("mean")),  # Use only 2005 & 2007 values
+    list("Foreign direct investment, net inflows (% of GDP) [BX.KLT.DINV.WD.GD.ZS]", c(2005, 2007), c("mean")),
+    list("Unemployment, total (% of total labor force) (modeled ILO estimate) [SL.UEM.TOTL.ZS]", c(2005, 2007), c("mean")),
+    list("Access to electricity (% of population) [EG.ELC.ACCS.ZS]", c(2005, 2007), c("mean")),
+    list("Government Effectiveness: Estimate [GE.EST]", c(2005, 2007), c("mean"))
+  ), 
+
+  # Step 10: Define Country Names for Readability in Outputs
+  unit.names.variable = "Country Name",
+  
+  # Step 11: Define Time Window for Visualization
+  time.plot = c(2003:2017)   # Full timeline for pre- and post-intervention analysis
+)
+
+# run synth
+synth.out <- synth(
+                   data.prep.obj = dataprep.out,
+                   method = "BFGS"
+                   )
+
+# store gaps
+store[,iter] <- dataprep.out$Y1plot - (dataprep.out$Y0plot %*% synth.out$solution.w)
+
+}
+```
+
+### Plot the placebo distribution
+
+```{r}
+data <- store
+rownames(data) <- 2003:2017
+
+# Set bounds in gaps data
+gap.start     <- 1
+gap.end       <- nrow(data)
+years         <- 2003:2017
+gap.end.pre  <- which(rownames(data)==2008)
+
+#  MSPE Pre-Treatment
+mse <-  apply(data[ gap.start:gap.end.pre,]^2,2,mean)
+max(mse)
+mse
+kenya_mse <- as.numeric(mse[6])
+
+# Exclude states with 5 times higher MSPE than kenya
+data <- data[,mse<5*kenya_mse]
+Cex.set <- .75
+kenya_data <- data[gap.start:gap.end, which(colnames(data) == "Kenya")]
+
+# Plot
+plot(years,kenya_data,
+     ylim=c(-400, 1000),xlab="year",
+     xlim=c(2003,2017),ylab="Gap in real GDPpc",
+     type="l",lwd=2,col="black",
+     xaxs="i",yaxs="i")
+
+# Add lines for control states
+for (i in 1:ncol(data)) { lines(years,data[gap.start:gap.end,i],col="gray") }
+
+## Add Basque Line
+lines(years,data[gap.start:gap.end,which(colnames(data)=="Kenya")],lwd=2,col="black")
+
+# Add grid
+abline(v=2012,lty="dotted",lwd=2)
+abline(v=2008, lty = "dotted", lwd =2)
+abline(h=0,lty="dashed",lwd=2)
+legend("bottomright",legend=c("Kenya","control regions"),
+lty=c(1,1),col=c("black","gray"),lwd=c(2,1),cex=.8)
+arrows(1967,-1.5,1968.5,-1.5,col="black",length=.1)
+text(1961.5,-1.5,"Terrorism Onset",cex=Cex.set)
+abline(v=2003)
+abline(v=2017)
+abline(h=-2)
+abline(h=2)
+```
+
+From the distribution we can say that Kenya had a significant upwards trend in the GDP, whereas the other control countries did not. So the REP can be a significant determining factor for GDP rise, showing positive treatment effect.
